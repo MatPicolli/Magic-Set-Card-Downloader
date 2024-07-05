@@ -1,5 +1,5 @@
 from tkinter.filedialog import askdirectory
-import PySimpleGUI as Sg
+import FreeSimpleGUI as Sg
 import requests
 
 set_url = "https://api.scryfall.com/sets"
