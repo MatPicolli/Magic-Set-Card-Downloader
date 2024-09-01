@@ -1,228 +1,205 @@
-from tkinter.filedialog import askdirectory
-import FreeSimpleGUI as Sg
-import requests
+import os
+import asyncio
+import logging
+from typing import List, Dict, Any
+import aiohttp
+import aiofiles
+import tkinter as tk
+from tkinter import filedialog
+import PySimpleGUI as sg
 
-set_url = "https://api.scryfall.com/sets"
-card_url = "https://api.scryfall.com/cards/named?fuzzy="
+# Constants
+SET_URL = "https://api.scryfall.com/sets"
+CARD_URL = "https://api.scryfall.com/cards/named?fuzzy="
+QUALITY_OPTIONS = ["small", "normal", "large"]
 
-def download_imagem(url, local, nome, nomeclatura):
-    import os
-    if os.path.exists(f"{local}/{nomeclatura.upper()}"):
-        pass
-    else:
-        os.makedirs(f"{local}/{nomeclatura.upper()}")
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    # Faz a requisição para a URL da imagem
-    response = requests.get(url)
+async def download_image(session: aiohttp.ClientSession, url: str, local: str, nome: str, nomeclatura: str, quality: str):
+    folder = f"{local}/{nomeclatura.upper()}"
+    os.makedirs(folder, exist_ok=True)
+
+    nome = nome.replace(":", "")
+    file_path = f"{folder}/{nome}.full.jpg"
 
     try:
-        # Verifique o status da requisição
-        if response.status_code == 200:
-            # Requisição bem sucedida
-            # Salve a imagem no local especificado
-            if ":" in nome:
-                nome = nome.replace(":", "")
-            with open(f"{local}/{nomeclatura.upper()}/{nome}.full.jpg", "wb") as f:
-                f.write(response.content)
-        else:
-            # Erro na requisição
-            print(f"Erro ao baixar imagem: {response.status_code}")
-    except ValueError:
-        print("Erro ao baixar imagem | ou local inexistente!")
-
-
-# Faz o download de cada carta do set
-def set_handler(nomeclatura, local, dados_do_set, quality, janela):
-
-    url_do_set_selecionado = ""
-    for i in dados_do_set:
-        if i["code"] == nomeclatura:
-            url_do_set_selecionado = i["search_uri"]
-            break
-
-    response = requests.get(url_do_set_selecionado)
-    if response.status_code == 200:
-        # Requisição bem sucedida
-        dados_do_set_selecionado = response.json()
-
-        for carta in dados_do_set_selecionado["data"]:
-            if carta["layout"] == "adventure":
-                nome_carta, _, _ = carta["name"].partition(" //")
-                url_imagem = carta["image_uris"][quality]
-                download_imagem(url_imagem, local, nome_carta, nomeclatura)
-
-            elif "//" in carta["name"] and carta["layout"] != "adventure":
-                for cardface in carta["card_faces"]:
-                    nome_carta = cardface["name"]
-                    url_imagem = cardface["image_uris"][quality]
-                    download_imagem(url_imagem, local, nome_carta, nomeclatura)
+        async with session.get(url) as response:
+            if response.status == 200:
+                async with aiofiles.open(file_path, "wb") as f:
+                    await f.write(await response.read())
+                logging.info(f"Downloaded: {nome}")
             else:
-                nome_carta = carta["name"]
-                url_imagem = carta["image_uris"][quality]
-                download_imagem(url_imagem, local, nome_carta, nomeclatura)
+                logging.error(f"Failed to download {nome}: HTTP {response.status}")
+    except Exception as e:
+        logging.error(f"Error downloading {nome}: {str(e)}")
 
+async def set_handler(session: aiohttp.ClientSession, nomeclatura: str, local: str, dados_do_set: List[Dict[str, Any]], quality: str):
+    url_do_set_selecionado = next((i["search_uri"] for i in dados_do_set if i["code"] == nomeclatura), None)
+    if not url_do_set_selecionado:
+        logging.error(f"Set {nomeclatura} not found")
+        return
 
-def verifica_se_set_existe(nomeclatura, dados_sets) -> bool:
-    value = False
-    for index in dados_sets:
-        if nomeclatura == index["code"]:
-            value = True
-            break
-    return value
-
-
-def janela_set():
-    response = requests.get(set_url)
-
-    dados_do_set = []
-    dados_do_set_nome = []
-
-    if response.status_code == 200:
-        # Requisição bem sucedida
-        dados_sets = response.json()
-
-        for index in dados_sets["data"]:
-            dados_do_set.append(index)
-            aux = f"{index['name']} ({str(index['code']).upper()})"
-            dados_do_set_nome.append(aux)
-
-    else:
-        # Erro na requisição
-        print(f"Erro: {response.status_code}")
-
-    quality = ["small", "normal", "large"]
-
-    Sg.theme("LightBlue7")
-
-    layout = [
-        [Sg.Text("Set:"), Sg.DropDown(dados_do_set_nome, size=(50, 1), key="-SETNOME-")],
-        [Sg.Text("Set (nomeclatura):"), Sg.InputText(size=(40, 1), key="-SETNOMECLATURA-")],
-        [Sg.Button("Local de Download", size=(15, 1)), Sg.InputText(key="-CAMINHO_DOWNLOAD-")],
-        [Sg.Text("Card quality:"), Sg.DropDown(quality, size=(15, 1), default_value=quality[2], key="-QUALIDADE-"),
-         Sg.Push(), Sg.Button("Download Set", size=(15, 1))],
-        [Sg.Text(key="-TXT-")]
-
-    ]
-
-    janela = Sg.Window("Set downloader", layout)
-
-    while True:
-        evento, valor = janela.read()
-        if evento == Sg.WINDOW_CLOSED:
-            break
-
-        if evento == "Local de Download":
-            janela["-CAMINHO_DOWNLOAD-"].update(askdirectory())
-
-        if evento == "Download Set" and valor["-CAMINHO_DOWNLOAD-"] != "":
-            if verifica_se_set_existe(valor["-SETNOMECLATURA-"], dados_do_set):
-                janela["-TXT-"].update("Downloading...")
-                set_handler(str(valor["-SETNOMECLATURA-"]).lower(),
-                            valor["-CAMINHO_DOWNLOAD-"], dados_do_set, valor["-QUALIDADE-"], janela)
-                janela["-TXT-"].update("Downloading...Finished")
-            else:
-                Sg.Popup("Set inexistente.")
-
-        elif evento == "Download Set" and valor["-CAMINHO_DOWNLOAD-"] == "":
-            Sg.Popup("É necessário selecionar o caminho de download antes!")
-
-    janela.close()
-
-
-def card_handler(dados_do_card, local, qualidade):
-    response = requests.get(dados_do_card["prints_search_uri"])
-    if response.status_code == 200:
-        # Requisição bem sucedida
-        prints_do_card = response.json()
-        for i in prints_do_card["data"]:
-            try:
-                if i["layout"] == "adventure":
-                    nome_carta, _, _ = i["name"].partition(" //")
-                    url_imagem = i["image_uris"][qualidade]
-                    download_imagem(url_imagem, local, nome_carta, i["set"])
-
-                elif "//" in i["name"] and i["layout"] != "adventure":
-                    for cardface in i["card_faces"]:
+    async with session.get(url_do_set_selecionado) as response:
+        if response.status == 200:
+            dados_do_set_selecionado = await response.json()
+            tasks = []
+            for carta in dados_do_set_selecionado["data"]:
+                if carta["layout"] == "adventure":
+                    nome_carta, _, _ = carta["name"].partition(" //")
+                    url_imagem = carta["image_uris"][quality]
+                    tasks.append(download_image(session, url_imagem, local, nome_carta, nomeclatura, quality))
+                elif "//" in carta["name"] and carta["layout"] != "adventure":
+                    for cardface in carta["card_faces"]:
                         nome_carta = cardface["name"]
-                        url_imagem = cardface["image_uris"][qualidade]
-                        download_imagem(url_imagem, local, nome_carta, i["set"])
+                        url_imagem = cardface["image_uris"][quality]
+                        tasks.append(download_image(session, url_imagem, local, nome_carta, nomeclatura, quality))
                 else:
-                    nome_carta = i["name"]
-                    url_imagem = i["image_uris"][qualidade]
-                    download_imagem(url_imagem, local, nome_carta, i["set"])
-            except:
-                print(f'error trying to downloading {str(i["name"]).upper()} from {str(i["set"]).upper()}')
+                    nome_carta = carta["name"]
+                    url_imagem = carta["image_uris"][quality]
+                    tasks.append(download_image(session, url_imagem, local, nome_carta, nomeclatura, quality))
+            await asyncio.gather(*tasks)
+        else:
+            logging.error(f"Failed to fetch set data: HTTP {response.status}")
 
+async def card_handler(session: aiohttp.ClientSession, dados_do_card: Dict[str, Any], local: str, quality: str):
+    async with session.get(dados_do_card["prints_search_uri"]) as response:
+        if response.status == 200:
+            prints_do_card = await response.json()
+            tasks = []
+            for i in prints_do_card["data"]:
+                try:
+                    if i["layout"] == "adventure":
+                        nome_carta, _, _ = i["name"].partition(" //")
+                        url_imagem = i["image_uris"][quality]
+                        tasks.append(download_image(session, url_imagem, local, nome_carta, i["set"], quality))
+                    elif "//" in i["name"] and i["layout"] != "adventure":
+                        for cardface in i["card_faces"]:
+                            nome_carta = cardface["name"]
+                            url_imagem = cardface["image_uris"][quality]
+                            tasks.append(download_image(session, url_imagem, local, nome_carta, i["set"], quality))
+                    else:
+                        nome_carta = i["name"]
+                        url_imagem = i["image_uris"][quality]
+                        tasks.append(download_image(session, url_imagem, local, nome_carta, i["set"], quality))
+                except Exception as e:
+                    logging.error(f"Error processing {i['name']} from {i['set']}: {str(e)}")
+            await asyncio.gather(*tasks)
+        else:
+            logging.error(f"Failed to fetch card prints: HTTP {response.status}")
 
-def janela_card():
-    quality = ["small", "normal", "large"]
-
-    Sg.theme("LightBlue6")
-
-    layout = [
-        [Sg.Text("Card:"), Sg.InputText(size=(40, 1), key="-CARDNOME-")],
-        [Sg.Button("Local de Download", size=(15, 1)), Sg.InputText(key="-CAMINHO_DOWNLOAD-")],
-        [Sg.Text("Card quality:"), Sg.DropDown(quality, size=(15, 1), default_value=quality[2], key="-QUALIDADE-"),
-         Sg.Push(), Sg.Button("Download Card", size=(15, 1))],
-        [Sg.Text(key="-TXT-")]
-
-    ]
-
-    janela = Sg.Window("Card downloader", layout)
-
-    while True:
-        evento, valor = janela.read()
-        if evento == Sg.WINDOW_CLOSED:
-            break
-
-        if evento == "Local de Download":
-            janela["-CAMINHO_DOWNLOAD-"].update(askdirectory())
-
-        if evento == "Download Card" and valor["-CAMINHO_DOWNLOAD-"] == "":
-            Sg.Popup("É necessário selecionar o caminho de download antes!")
-
-        elif evento == "Download Card" and valor["-CARDNOME-"] == "":
-            Sg.Popup("É necessário escrever o nome da card antes!")
-
-        elif evento == "Download Card" and valor["-CAMINHO_DOWNLOAD-"] != "":
-            response = requests.get(card_url + valor["-CARDNOME-"].lower().replace(" ", "+").replace("/", "+").replace(",", "+").replace("'", ""))
-            if response.status_code == 200:
-                # Requisição bem sucedida
-                dados_do_card = response.json()
-                card_handler(dados_do_card, valor["-CAMINHO_DOWNLOAD-"], valor["-QUALIDADE-"])
+async def fetch_set_data():
+    async with aiohttp.ClientSession() as session:
+        async with session.get(SET_URL) as response:
+            if response.status == 200:
+                dados_sets = await response.json()
+                return dados_sets["data"]
             else:
-                # Erro na requisição
-                Sg.Popup("Card não existe.")
+                logging.error(f"Failed to fetch set data: HTTP {response.status}")
+                return []
 
-    janela.close()
-
-
-# Janela princial do programa
-def janela_principal():
-
-    # tema (cores) da janela
-    Sg.theme("Dark")
+def create_set_window(dados_do_set):
+    sg.theme("LightBlue7")
+    dados_do_set_nome = [f"{index['name']} ({str(index['code']).upper()})" for index in dados_do_set]
 
     layout = [
-        [Sg.Button("SET", size=(30, 1), key="-SET-")],
-        [Sg.Button("CARD", size=(30, 1), key="-CARD-")]
+        [sg.Text("Set:"), sg.Combo(dados_do_set_nome, size=(50, 1), key="-SETNOME-")],
+        [sg.Text("Set (nomenclature):"), sg.Input(size=(40, 1), key="-SETNOMECLATURA-")],
+        [sg.Button("Download Location", size=(15, 1)), sg.Input(key="-CAMINHO_DOWNLOAD-")],
+        [sg.Text("Card quality:"), sg.Combo(QUALITY_OPTIONS, size=(15, 1), default_value=QUALITY_OPTIONS[2], key="-QUALIDADE-"),
+         sg.Push(), sg.Button("Download Set", size=(15, 1))],
+        [sg.Text(key="-TXT-")]
     ]
 
-    janela = Sg.Window("Test", layout)
+    return sg.Window("Set downloader", layout)
 
+def create_card_window():
+    sg.theme("LightBlue6")
+
+    layout = [
+        [sg.Text("Card:"), sg.Input(size=(40, 1), key="-CARDNOME-")],
+        [sg.Button("Download Location", size=(15, 1)), sg.Input(key="-CAMINHO_DOWNLOAD-")],
+        [sg.Text("Card quality:"), sg.Combo(QUALITY_OPTIONS, size=(15, 1), default_value=QUALITY_OPTIONS[2], key="-QUALIDADE-"),
+         sg.Push(), sg.Button("Download Card", size=(15, 1))],
+        [sg.Text(key="-TXT-")]
+    ]
+
+    return sg.Window("Card downloader", layout)
+
+def create_main_window():
+    sg.theme("Dark")
+
+    layout = [
+        [sg.Button("SET", size=(30, 1), key="-SET-")],
+        [sg.Button("CARD", size=(30, 1), key="-CARD-")]
+    ]
+
+    return sg.Window("MTG Card Downloader", layout)
+
+async def main():
+    main_window = create_main_window()
+    
     while True:
-        evento, valore = janela.read()
-        if evento == Sg.WINDOW_CLOSED:
+        event, values = main_window.read()
+        if event == sg.WINDOW_CLOSED:
             break
 
-        if evento == "-SET-":
-            janela_set()
+        if event == "-SET-":
+            dados_do_set = await fetch_set_data()
+            set_window = create_set_window(dados_do_set)
+            
+            while True:
+                set_event, set_values = set_window.read()
+                if set_event == sg.WINDOW_CLOSED:
+                    break
 
-        if evento == "-CARD-":
-            janela_card()
+                if set_event == "Download Location":
+                    set_window["-CAMINHO_DOWNLOAD-"].update(filedialog.askdirectory())
 
-    janela.close()
+                if set_event == "Download Set" and set_values["-CAMINHO_DOWNLOAD-"]:
+                    nomeclatura = set_values["-SETNOMECLATURA-"].lower()
+                    if any(set_data["code"] == nomeclatura for set_data in dados_do_set):
+                        set_window["-TXT-"].update("Downloading...")
+                        async with aiohttp.ClientSession() as session:
+                            await set_handler(session, nomeclatura, set_values["-CAMINHO_DOWNLOAD-"], dados_do_set, set_values["-QUALIDADE-"])
+                        set_window["-TXT-"].update("Download completed")
+                    else:
+                        sg.popup("Set does not exist.")
+                elif set_event == "Download Set" and not set_values["-CAMINHO_DOWNLOAD-"]:
+                    sg.popup("Please select a download location first!")
 
+            set_window.close()
+
+        if event == "-CARD-":
+            card_window = create_card_window()
+
+            while True:
+                card_event, card_values = card_window.read()
+                if card_event == sg.WINDOW_CLOSED:
+                    break
+
+                if card_event == "Download Location":
+                    card_window["-CAMINHO_DOWNLOAD-"].update(filedialog.askdirectory())
+
+                if card_event == "Download Card":
+                    if not card_values["-CAMINHO_DOWNLOAD-"]:
+                        sg.popup("Please select a download location first!")
+                    elif not card_values["-CARDNOME-"]:
+                        sg.popup("Please enter a card name!")
+                    else:
+                        card_name = card_values["-CARDNOME-"].lower().replace(" ", "+").replace("/", "+").replace(",", "+").replace("'", "")
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(CARD_URL + card_name) as response:
+                                if response.status == 200:
+                                    dados_do_card = await response.json()
+                                    await card_handler(session, dados_do_card, card_values["-CAMINHO_DOWNLOAD-"], card_values["-QUALIDADE-"])
+                                    sg.popup("Download completed")
+                                else:
+                                    sg.popup("Card does not exist.")
+
+            card_window.close()
+
+    main_window.close()
 
 if __name__ == "__main__":
-    janela_principal()
+    asyncio.run(main())
